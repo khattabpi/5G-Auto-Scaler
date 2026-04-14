@@ -1,0 +1,113 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ai-forecaster-deployment
+  namespace: default
+  labels:                            # ← labels missing on Deployment itself
+    app: ai-forecaster
+spec:
+  replicas: 2                        # ← was 1; single replica = zero fault tolerance
+  selector:
+    matchLabels:
+      app: ai-forecaster
+  strategy:
+    type: RollingUpdate              # ← no strategy defined; prevents downtime on updates
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+
+  template:
+    metadata:
+      labels:
+        app: ai-forecaster
+    spec:
+      serviceAccountName: ai-scaler-sa
+
+      # ── Security hardening (pod-level) ──────────────────────────────────────
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 2000
+
+      containers:
+      - name: forecaster
+        image: 5g-traffic-forecaster:latest
+        imagePullPolicy: Never       # ← OK for local/minikube dev; see note below
+
+        # ── Ports (missing entirely in original) ────────────────────────────
+        ports:
+        - containerPort: 8080        # ← expose the app port so Services can target it
+          protocol: TCP
+
+        # ── Resource limits (required for scheduler + HPA) ──────────────────
+        resources:
+          requests:
+            cpu: "250m"              # ← AI/ML workload needs more CPU than plain nginx
+            memory: "512Mi"
+          limits:
+            cpu: "1000m"
+            memory: "1Gi"
+
+        # ── Health probes (missing entirely in original) ─────────────────────
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8080
+          initialDelaySeconds: 30    # ← give TF model time to load before first check
+          periodSeconds: 20
+          failureThreshold: 3
+
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8080
+          initialDelaySeconds: 15
+          periodSeconds: 10
+          failureThreshold: 3
+
+        # ── Environment variables (model config via env, not hardcoded) ──────
+        env:
+        - name: MODEL_SEQ_LEN
+          value: "10"
+        - name: SCALER_NAMESPACE
+          value: "default"
+        - name: TARGET_DEPLOYMENT
+          value: "5g-traffic-service"
+
+        # ── Container-level security ─────────────────────────────────────────
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+
+        # ── Writable dirs needed by Python / TensorFlow ──────────────────────
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+        - name: model-cache
+          mountPath: /app/.cache      # TF/Keras model cache
+
+      volumes:
+      - name: tmp
+        emptyDir: {}
+      - name: model-cache
+        emptyDir: {}
+
+---
+# ── Service so other pods / the scaler can reach the forecaster ─────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: ai-forecaster-service
+  namespace: default
+  labels:
+    app: ai-forecaster
+spec:
+  selector:
+    app: ai-forecaster
+  ports:
+  - port: 80
+    targetPort: 8080
+    protocol: TCP
+  type: ClusterIP

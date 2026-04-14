@@ -1,0 +1,87 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: 5g-traffic-service
+  namespace: default
+  labels:                          # ← labels missing on Deployment itself
+    app: 5g-traffic-service
+spec:
+  replicas: 2                      # ← was 1; single replica = zero fault tolerance
+  selector:
+    matchLabels:
+      app: 5g-traffic-service      # ← was "dummy-5g-service"; must match template labels
+  strategy:
+    type: RollingUpdate            # ← no strategy defined; this prevents downtime on updates
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+
+  template:
+    metadata:
+      labels:
+        app: 5g-traffic-service    # ← fixed to match selector above
+    spec:
+      serviceAccountName: ai-scaler-sa   # ← bind the SA created in rbac.yaml
+
+      # ── Security hardening ──────────────────────────────────────────────────
+      securityContext:
+        runAsNonRoot: true         # ← never run as root
+        runAsUser: 1000
+        fsGroup: 2000
+
+      containers:
+      - name: nginx
+        image: nginx:1.27-alpine   # ← pin a specific version; "alpine" tag floats
+        ports:
+        - containerPort: 80
+          protocol: TCP
+
+        # ── Resource limits (REQUIRED for HPA / AI autoscaler to work) ───────
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+          limits:
+            cpu: "500m"
+            memory: "256Mi"
+
+        # ── Health probes (without these k8s can't detect a broken pod) ──────
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 80
+          initialDelaySeconds: 10
+          periodSeconds: 15
+          failureThreshold: 3
+
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 80
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          failureThreshold: 3
+
+        # ── Container-level security ─────────────────────────────────────────
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+
+        # ── Writable tmp dir needed because root fs is read-only ─────────────
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+        - name: nginx-cache
+          mountPath: /var/cache/nginx
+        - name: nginx-run
+          mountPath: /var/run
+
+      volumes:
+      - name: tmp
+        emptyDir: {}
+      - name: nginx-cache
+        emptyDir: {}
+      - name: nginx-run
+        emptyDir: {}

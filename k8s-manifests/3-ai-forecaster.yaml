@@ -1,0 +1,20 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ai-forecaster-deployment
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ai-forecaster
+  template:
+    metadata:
+      labels:
+        app: ai-forecaster
+    spec:
+      serviceAccountName: ai-scaler-sa
+      containers:
+      - name: forecaster
+        image: 5g-traffic-forecaster:latest
+        imagePullPolicy: Never

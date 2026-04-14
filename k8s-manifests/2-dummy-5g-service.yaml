@@ -1,0 +1,20 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: 5g-traffic-service
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dummy-5g-service
+  template:
+    metadata:
+      labels:
+        app: dummy-5g-service
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:alpine
+        ports:
+        - containerPort: 80
